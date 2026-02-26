@@ -128,6 +128,7 @@ class FinetuneConfig:
     curriculum_r_peak_end: float = 0.8
     curriculum_schedule: str = "default"                      # default | linear | cosine | step
     scale_power: float = 1.0
+    scale_use_curriculum: bool = True                         # executed_scale 模式是否启用高斯 curriculum
 
     # Wandb
     wandb_entity: str = "your-wandb-entity"
@@ -608,6 +609,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             r_peak_end=cfg.curriculum_r_peak_end,
             schedule=cfg.curriculum_schedule,
             scale_power=cfg.scale_power,
+            scale_use_curriculum=cfg.scale_use_curriculum,
             batch_normalize=True,
         )
         curriculum_calculator = CurriculumWeightCalculator(curriculum_config)
