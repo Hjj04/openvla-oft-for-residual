@@ -153,4 +153,11 @@ class PaddedCollatorForActionPrediction:
         )
         if dataset_names is not None:
             output["dataset_names"] = dataset_names
+
+        # Passthrough weight_value and task_id for weighted SFT
+        if "weight_value" in instances[0]:
+            output["weight_values"] = torch.tensor([inst["weight_value"] for inst in instances], dtype=torch.float32)
+        if "task_id" in instances[0]:
+            output["task_ids"] = torch.tensor([inst["task_id"] for inst in instances], dtype=torch.long)
+
         return output

@@ -44,12 +44,21 @@ BRIDGE_CONSTANTS = {
     "ACTION_PROPRIO_NORMALIZATION_TYPE": NormalizationType.BOUNDS_Q99,
 }
 
+FRANKA_CONSTANTS = {
+    "NUM_ACTIONS_CHUNK": 10,
+    "ACTION_DIM": 10,
+    "PROPRIO_DIM": 10,
+    "ACTION_PROPRIO_NORMALIZATION_TYPE": NormalizationType.BOUNDS_Q99,
+}
+
 
 # Function to detect robot platform from command line arguments
 def detect_robot_platform():
     cmd_args = " ".join(sys.argv).lower()
 
-    if "libero" in cmd_args:
+    if "franka" in cmd_args:
+        return "FRANKA"
+    elif "libero" in cmd_args:
         return "LIBERO"
     elif "aloha" in cmd_args:
         return "ALOHA"
@@ -64,7 +73,9 @@ def detect_robot_platform():
 ROBOT_PLATFORM = detect_robot_platform()
 
 # Set the appropriate constants based on the detected platform
-if ROBOT_PLATFORM == "LIBERO":
+if ROBOT_PLATFORM == "FRANKA":
+    constants = FRANKA_CONSTANTS
+elif ROBOT_PLATFORM == "LIBERO":
     constants = LIBERO_CONSTANTS
 elif ROBOT_PLATFORM == "ALOHA":
     constants = ALOHA_CONSTANTS
