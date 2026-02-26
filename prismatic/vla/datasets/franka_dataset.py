@@ -184,12 +184,12 @@ class FrankaDataset(Dataset):
         return None
 
     def _extract_proprio(self, transition: Dict) -> Optional[np.ndarray]:
-        """从 transition 中提取 proprio (agent_pos 或 state)"""
+        """从 transition 中提取 proprio (优先 state，因为 state 是 10D rot6d 格式)"""
         obs = transition.get("observations", transition.get("observation", {}))
-        if "agent_pos" in obs:
-            return np.array(obs["agent_pos"], dtype=np.float32)[:self.proprio_dim]
-        elif "state" in obs:
+        if "state" in obs:
             return np.array(obs["state"], dtype=np.float32)[:self.proprio_dim]
+        elif "agent_pos" in obs:
+            return np.array(obs["agent_pos"], dtype=np.float32)[:self.proprio_dim]
         return None
 
     def _extract_image(self, transition: Dict, key: str = "image") -> Optional[np.ndarray]:

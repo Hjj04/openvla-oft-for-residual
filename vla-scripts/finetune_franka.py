@@ -48,11 +48,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 import wandb
 
-from experiments.robot.openvla_utils import (
-    check_model_logic_mismatch,
-    model_is_on_hf_hub,
-    update_auto_map,
-)
+from experiments.robot.openvla_utils import model_is_on_hf_hub
 from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
 from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
 from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
@@ -209,6 +205,21 @@ def compute_smoothened_metrics(metrics_deques) -> dict:
         if d and len(d) > 0:
             smoothened[name] = sum(d) / len(d)
     return smoothened
+
+
+def _ensure_openvla_model_type(checkpoint_dir: str) -> None:
+    """Update config.json model_type to 'openvla' so AutoModel uses registered classes."""
+    import json as _json
+    config_path = os.path.join(checkpoint_dir, "config.json")
+    if not os.path.exists(config_path):
+        return
+    with open(config_path, "r") as f:
+        config = _json.load(f)
+    if config.get("model_type") != "openvla":
+        config["model_type"] = "openvla"
+        with open(config_path, "w") as f:
+            _json.dump(config, f, indent=2)
+        print(f"Updated model_type to 'openvla' in {config_path}")
 
 
 def log_metrics_to_wandb(metrics, prefix, step, wandb_entity) -> None:
@@ -393,10 +404,19 @@ def save_training_checkpoint(cfg, run_dir, log_step, vla, processor, proprio_pro
 
     # Merge LoRA
     if cfg.use_lora and cfg.merge_lora_during_training:
+        # 强制在 CPU 上加载和 merge，避免占用训练 GPU 显存
         base_vla = AutoModelForVision2Seq.from_pretrained(
-            cfg.vla_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True
+            cfg.vla_path,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            trust_remote_code=False,
+            device_map="cpu",          # ← 关键修改
         )
-        merged_vla = PeftModel.from_pretrained(base_vla, adapter_dir)
+        merged_vla = PeftModel.from_pretrained(
+            base_vla,
+            adapter_dir,
+            device_map="cpu",          # ← 关键修改
+        )
         merged_vla = merged_vla.merge_and_unload()
         if distributed_state.is_main_process:
             merged_vla.save_pretrained(checkpoint_dir)
@@ -464,20 +484,21 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Load model
     if model_is_on_hf_hub(cfg.vla_path):
         cfg.vla_path = snapshot_download(repo_id=cfg.vla_path)
-    else:
-        AutoConfig.register("openvla", OpenVLAConfig)
-        AutoImageProcessor.register(OpenVLAConfig, PrismaticImageProcessor)
-        AutoProcessor.register(OpenVLAConfig, PrismaticProcessor)
-        AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction)
 
+    # Register OpenVLA classes so AutoModel resolves them without trust_remote_code
+    AutoConfig.register("openvla", OpenVLAConfig)
+    AutoImageProcessor.register(OpenVLAConfig, PrismaticImageProcessor)
+    AutoProcessor.register(OpenVLAConfig, PrismaticProcessor)
+    AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction)
+
+    # Ensure config.json has model_type="openvla" so registered classes are used
     if distributed_state.is_main_process:
-        update_auto_map(cfg.vla_path)
-        check_model_logic_mismatch(cfg.vla_path)
+        _ensure_openvla_model_type(cfg.vla_path)
     dist.barrier()
 
-    processor = AutoProcessor.from_pretrained(cfg.vla_path, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(cfg.vla_path, trust_remote_code=False)
     vla = AutoModelForVision2Seq.from_pretrained(
-        cfg.vla_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True
+        cfg.vla_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=False
     ).to(device_id)
 
     vla.vision_backbone.set_num_images_in_input(cfg.num_images_in_input)
@@ -503,6 +524,14 @@ def finetune(cfg: FinetuneConfig) -> None:
             state_dict = load_checkpoint("vision_backbone", cfg.vla_path, cfg.resume_step)
             vla.model.vision_backbone.load_state_dict(state_dict)
         vla.model.vision_backbone = vla.model.vision_backbone.to(device_id)
+
+    # Gradient checkpointing — trades compute for memory, critical for 24GB GPUs
+    vla.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": False}
+    )
+    # Disable KV cache (incompatible with gradient checkpointing)
+    if hasattr(vla, "config"):
+        vla.config.use_cache = False
 
     vla = wrap_ddp(vla, device_id, find_unused=True)
 
@@ -731,7 +760,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                     global_step += 1
 
                 # Save checkpoint
-                if global_step > 0 and log_step % cfg.save_freq == 0 and (global_batch_idx + 1) % cfg.grad_accumulation_steps == 0:
+                if log_step > 0 and log_step % cfg.save_freq == 0 and (global_batch_idx + 1) % cfg.grad_accumulation_steps == 0:
                     save_training_checkpoint(
                         cfg=cfg, run_dir=run_dir, log_step=log_step,
                         vla=vla, processor=processor,

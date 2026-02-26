@@ -143,12 +143,12 @@ class OpenVLAPolicy:
 
         # Load VLA backbone
         print(f"Loading OpenVLA from {cfg.pretrained_checkpoint}...")
-        self.processor = AutoProcessor.from_pretrained(cfg.pretrained_checkpoint, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(cfg.pretrained_checkpoint, trust_remote_code=False)
         self.vla = AutoModelForVision2Seq.from_pretrained(
             cfg.pretrained_checkpoint,
             torch_dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
-            trust_remote_code=True,
+            trust_remote_code=False,
         ).to(DEVICE)
         self.vla.eval()
 
